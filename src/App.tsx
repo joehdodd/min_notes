@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useDebounce } from "./hooks/debounce";
 import "./styles.css";
 
 interface Note {
@@ -11,15 +12,51 @@ interface Note {
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([]);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const debouncedContent = useDebounce(editContent, 800);
 
-  // Load notes on component mount
   useEffect(() => {
     loadNotes();
   }, []);
+
+  const handleUpdate = async () => {
+    setMessage("");
+    setIsSaving(true);
+    try {
+      await invoke("update_note", {
+        id: selectedNoteId,
+        content: editContent,
+        title: notes.find((n) => n.id === selectedNoteId)?.title || "Untitled",
+      });
+      await loadNotes();
+    } catch (error) {
+      console.error("Failed to update note:", error);
+      setMessage("Failed to update note");
+    } finally {
+      setMessage("Note updated automatically!");
+      setIsSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (debouncedContent !== editContent) {
+      handleUpdate();
+    }
+  }, [debouncedContent]);
+
+  useEffect(() => {
+    if (selectedNoteId) {
+      const note = notes.find((n) => n.id === selectedNoteId);
+      setEditContent(note ? note.content : "");
+    } else {
+      setEditContent("");
+    }
+  }, [selectedNoteId, notes]);
 
   const loadNotes = async () => {
     try {
@@ -31,28 +68,19 @@ function App() {
     }
   };
 
-  const saveNote = async () => {
-    if (!title.trim() || !content.trim()) {
-      setMessage("Please enter both title and content");
-      return;
-    }
-
+  const createNote = async () => {
     setIsLoading(true);
     setMessage("");
-
     try {
       await invoke("save_note", {
-        title: title.trim(),
-        content: content.trim(),
+        title: "Untitled",
+        content: "",
       });
-
-      setTitle("");
-      setContent("");
-      setMessage("Note saved successfully!");
-      await loadNotes(); // Reload notes to show the new one
+      setMessage("Note created!");
+      await loadNotes();
     } catch (error) {
-      console.error("Failed to save note:", error);
-      setMessage("Failed to save note");
+      console.error("Failed to create note:", error);
+      setMessage("Failed to create note");
     } finally {
       setIsLoading(false);
     }
@@ -62,85 +90,72 @@ function App() {
     return new Date(timestamp * 1000).toLocaleString();
   };
 
+  const selectedNote = notes.find((n) => n.id === selectedNoteId);
+
   return (
-    <main className="flex bg-slate-700 h-full w-full p-4">
-      {/* Note Entry Panel */}
-      <div className="w-1/2 pr-4">
-        <div className="bg-slate-100 rounded-lg shadow-2xl p-6 h-full">
-          <h2 className="text-xl font-bold mb-4 text-slate-800">Create Note</h2>
-          
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Title
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Enter note title..."
+    <main className="flex gap-2 bg-slate-700 h-full w-full p-2">
+      <div className="w-1/3">
+        <div className="bg-slate-100 rounded-xs shadow-2xl p-6 h-full flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-slate-800">Notes</h2>
+            <button
+              onClick={createNote}
+              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed"
               disabled={isLoading}
-            />
+              title="Create new note"
+            >
+              +
+            </button>
           </div>
-
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-slate-700 mb-2">
-              Content
-            </label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 h-64 resize-none"
-              placeholder="Write your note here..."
-              disabled={isLoading}
-            />
-          </div>
-
-          <button
-            onClick={saveNote}
-            disabled={isLoading || !title.trim() || !content.trim()}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors"
-          >
-            {isLoading ? "Saving..." : "Save Note"}
-          </button>
-
-          {message && (
-            <div className={`mt-4 p-3 rounded-md text-sm ${
-              message.includes("successfully") 
-                ? "bg-green-100 text-green-700" 
-                : "bg-red-100 text-red-700"
-            }`}>
-              {message}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Notes List Panel */}
-      <div className="w-1/2 pl-4">
-        <div className="bg-slate-100 rounded-lg shadow-2xl p-6 h-full">
-          <h2 className="text-xl font-bold mb-4 text-slate-800">Saved Notes ({notes.length})</h2>
-          
-          <div className="overflow-y-auto h-[calc(100%-3rem)]">
+          <div className="overflow-y-auto flex-1">
             {notes.length === 0 ? (
-              <p className="text-slate-500 text-center mt-8">No notes yet. Create your first note!</p>
+              <p className="text-slate-500 text-center mt-8">No notes yet.</p>
             ) : (
-              <div className="space-y-4">
+              <ul>
                 {notes.map((note) => (
-                  <div key={note.id} className="bg-white p-4 rounded-md shadow border">
-                    <h3 className="font-semibold text-slate-800 mb-2">{note.title}</h3>
-                    <p className="text-slate-600 text-sm mb-2 whitespace-pre-wrap">
-                      {note.content.length > 150 
-                        ? `${note.content.substring(0, 150)}...` 
-                        : note.content
-                      }
-                    </p>
-                    <p className="text-xs text-slate-400">{formatDate(note.timestamp)}</p>
-                  </div>
+                  <li
+                    key={note.id}
+                    className={`p-3 mb-2 rounded cursor-pointer border ${selectedNoteId === note.id
+                      ? "bg-blue-200 border-blue-400"
+                      : "bg-white border-slate-200 hover:bg-slate-200"
+                      }`}
+                    onClick={() => setSelectedNoteId(note.id)}
+                  >
+                    <div className="font-semibold text-slate-800">{note.title}</div>
+                    <div className="text-xs text-slate-400">{formatDate(note.timestamp)}</div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </div>
+        </div>
+      </div>
+      {/* Right panel: Markdown editor */}
+      <div className="w-2/3">
+        <div className="bg-slate-100 rounded-xs shadow-2xl p-6 h-full flex flex-col">
+          {selectedNote ? (
+            <>
+              <h2 className="text-xl font-bold mb-2 text-slate-800">{selectedNote.title}</h2>
+              <div className="text-xs text-slate-400 mb-4">{formatDate(selectedNote.timestamp)}</div>
+              <textarea
+                ref={textareaRef}
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 h-[calc(100vh-16rem)] resize-none font-mono"
+                placeholder="Edit your note in Markdown..."
+              />
+              <div className="flex justify-end mt-4">
+                <span className="text-slate-500 text-sm">
+                  {isSaving ? "Saving..." : message}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-slate-400">
+              <span className="text-2xl mb-2">📝</span>
+              <span>Select a note to view and edit</span>
+            </div>
+          )}
         </div>
       </div>
     </main>
