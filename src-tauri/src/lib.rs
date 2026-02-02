@@ -13,7 +13,7 @@ struct Note {
 }
 
 #[tauri::command]
-fn save_note(app: AppHandle, title: String, content: String) -> Result<String, String> {
+fn create_note(app: AppHandle, title: String, content: String) -> Result<String, String> {
     let app_data_dir = app
         .path()
         .app_data_dir()
@@ -85,6 +85,32 @@ fn update_note(app: AppHandle, id: String, title: String, content: String) -> Re
 }
 
 #[tauri::command]
+fn delete_note(app: AppHandle, id: String) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+
+    let notes_file = app_data_dir.join("notes.json");
+
+    if !notes_file.exists() {
+        return Err("Notes file does not exist".into());
+    }
+
+    let file_content =
+        fs::read_to_string(&notes_file).map_err(|e| format!("Failed to read notes file: {}", e))?;
+
+    let mut notes: Vec<Note> = serde_json::from_str(&file_content)
+        .map_err(|e| format!("Failed to parse notes file: {}", e))?;
+
+    notes.retain(|n| n.id != id);
+    let notes_json = serde_json::to_string_pretty(&notes)
+        .map_err(|e| format!("Failed to serialize notes: {}", e))?;
+    fs::write(&notes_file, notes_json).map_err(|e| format!("Failed to write notes file: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn load_notes(app: AppHandle) -> Result<Vec<Note>, String> {
     let app_data_dir = app
         .path()
@@ -111,7 +137,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![save_note, update_note, load_notes])
+        .invoke_handler(tauri::generate_handler![
+            create_note,
+            update_note,
+            delete_note,
+            load_notes
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

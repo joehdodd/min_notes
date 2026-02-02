@@ -12,26 +12,45 @@ interface Note {
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([]);
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const [editContent, setEditContent] = useState<string>("");
+  const [selectedNote, setSelectedNote] = useState<Note | null>(null);
+  const [originalNote, setOriginalNote] = useState({ title: "", content: "" });
+  const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const debouncedContent = useDebounce(editContent, 800);
+  const debouncedContent = useDebounce(selectedNote?.content, 800);
 
   useEffect(() => {
     loadNotes();
   }, []);
+
+  const handleSelctedNote = (note: Note) => {
+    setSelectedNote(note);
+    setIsEditingTitle(false);
+    setMessage("");
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 100);
+  };
+
+  useEffect(() => {
+    if (selectedNote) {
+      setOriginalNote({
+        title: selectedNote.title,
+        content: selectedNote.content,
+      });
+    }
+  }, [selectedNote?.id]);
 
   const handleUpdate = async () => {
     setMessage("");
     setIsSaving(true);
     try {
       await invoke("update_note", {
-        id: selectedNoteId,
-        content: editContent,
-        title: notes.find((n) => n.id === selectedNoteId)?.title || "Untitled",
+        id: selectedNote?.id,
+        content: selectedNote?.content,
+        title: selectedNote?.title || "Untitled",
       });
       await loadNotes();
     } catch (error) {
@@ -41,28 +60,21 @@ function App() {
       setMessage("Note updated automatically!");
       setIsSaving(false);
     }
-  }
+  };
 
   useEffect(() => {
-    console.log("Debounced content:", debouncedContent, editContent);
-    if (debouncedContent !== editContent) {
+    const isDirty =
+      debouncedContent !== originalNote.content ||
+      selectedNote?.title !== originalNote.title;
+    if (isDirty) {
       handleUpdate();
     }
-  }, [debouncedContent]);
-
-  useEffect(() => {
-    if (selectedNoteId) {
-      const note = notes.find((n) => n.id === selectedNoteId);
-      setEditContent(note ? note.content : "");
-    } else {
-      setEditContent("");
-    }
-  }, [selectedNoteId, notes]);
+  }, [debouncedContent, selectedNote?.title, originalNote]);
 
   const loadNotes = async () => {
     try {
       const loadedNotes = await invoke<Note[]>("load_notes");
-      setNotes(loadedNotes.sort((a, b) => b.timestamp - a.timestamp));
+      setNotes(loadedNotes);
     } catch (error) {
       console.error("Failed to load notes:", error);
       setMessage("Failed to load notes");
@@ -73,7 +85,7 @@ function App() {
     setIsLoading(true);
     setMessage("");
     try {
-      await invoke("save_note", {
+      await invoke("create_note", {
         title: "Untitled",
         content: "",
       });
@@ -91,17 +103,28 @@ function App() {
     return new Date(timestamp * 1000).toLocaleString();
   };
 
-  const selectedNote = notes.find((n) => n.id === selectedNoteId);
+  const handleDelete = async (id: string) => {
+    setMessage("");
+    try {
+      await invoke("delete_note", { id });
+      setMessage("Note deleted!");
+      setSelectedNote(null);
+      await loadNotes();
+    } catch (error) {
+      console.error("Failed to delete note:", error);
+      setMessage("Failed to delete note");
+    }
+  };
 
   return (
-    <main className="flex bg-slate-700 h-full w-full">
+    <main className="flex bg-slate-900 h-full w-full">
       <div className="w-1/4 px-2 pt-4">
         <div className="h-full flex flex-col">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-xl font-bold text-slate-100">Notes</h2>
             <button
               onClick={createNote}
-              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed"
+              className="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-900 disabled:bg-slate-400 disabled:cursor-not-allowed"
               disabled={isLoading}
               title="Create new note"
             >
@@ -116,14 +139,18 @@ function App() {
                 {notes.map((note) => (
                   <li
                     key={note.id}
-                    className={`p-3 mb-2 rounded cursor-pointer border ${selectedNoteId === note.id
-                      ? "bg-slate-500 border-slate-500"
-                      : "bg-slate-600 border-slate-600 hover:border-slate-800 hover:bg-slate-800"
+                    className={`p-3 mb-2 rounded cursor-pointer border ${selectedNote?.id === note.id
+                      ? "bg-slate-700 border-slate-700"
+                      : "bg-slate-800 border-slate-800 hover:border-slate-700 hover:bg-slate-700"
                       }`}
-                    onClick={() => setSelectedNoteId(note.id)}
+                    onClick={() => handleSelctedNote(note)}
                   >
-                    <div className="font-semibold text-slate-100">{note.title}</div>
-                    <div className="text-xs text-slate-100">{formatDate(note.timestamp)}</div>
+                    <div className="font-semibold text-slate-100">
+                      {note.title}
+                    </div>
+                    <div className="text-xs text-slate-100">
+                      {formatDate(note.timestamp)}
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -133,24 +160,52 @@ function App() {
       </div>
       {/* Right panel: Markdown editor */}
       <div className="w-3/4">
-        <div className="bg-slate-700 px-2 pt-2 h-full flex flex-col">
+        <div className="bg-slate-900 px-2 pt-2 h-full flex flex-col">
           {selectedNote ? (
             <>
               <div className="p-1">
-                <h2 className="text-xl font-bold mb-2 text-slate-100">{selectedNote.title}</h2>
-                <div className="text-xs text-slate-100 mb-4">{formatDate(selectedNote.timestamp)}</div>
+                {isEditingTitle ? (
+                  <input
+                    className="text-xl font-bold mb-2 text-slate-100 bg-transparent border-none focus:outline-none"
+                    value={selectedNote.title}
+                    autoFocus
+                    onChange={(e) =>
+                      setSelectedNote({
+                        ...selectedNote,
+                        title: e.target.value,
+                      })
+                    }
+                    onBlur={() => setIsEditingTitle(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") setIsEditingTitle(false);
+                    }}
+                  />
+                ) : (
+                  <h2
+                    className="text-xl font-bold mb-2 text-slate-100 cursor-pointer"
+                    onClick={() => setIsEditingTitle(true)}
+                  >
+                    {selectedNote.title}
+                  </h2>
+                )}
+                <div className="text-xs text-slate-100 mb-4">
+                  {formatDate(selectedNote.timestamp)}
+                </div>
               </div>
               <textarea
                 ref={textareaRef}
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
+                value={selectedNote.content}
+                onChange={(e) => setSelectedNote({ ...selectedNote, content: e.target.value })}
                 className="w-full p-1 h-[calc(100vh-8rem)] resize-none font-mono text-slate-100"
                 placeholder="Edit your note in Markdown..."
               />
-              <div className="flex justify-end mt-4">
-                <span className="text-slate-100 text-sm">
-                  {isSaving ? "Saving..." : message}
-                </span>
+              <div className="flex items-center gap-4 justify-end mt-4 p-4">
+                <button
+                  className="py-1 px-2 rounded bg-red-700 hover:bg-red-500 hover:cursor-pointer text-slate-100"
+                  onClick={() => handleDelete(selectedNote?.id)}
+                >
+                  Delete
+                </button>
               </div>
             </>
           ) : (
